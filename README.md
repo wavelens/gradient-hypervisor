@@ -22,6 +22,59 @@ Starts temporary Gradient team workers when connected workers cannot handle wait
 - Builds get the Nix sandbox and `/dev/kvm` when pods run with `privileged`.
 - Nix can fall back to unsandboxed builds when a pod can't create namespaces. Most clusters forbid that setup unless pods run with `privileged`.
 
+#### Worker Pod options
+
+Each pool can set `podOptions.volumes`, `podOptions.volumeMounts` and `podOptions.env`
+using Kubernetes Volume, VolumeMount and EnvVar objects:
+https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/
+The service appends these to the generated worker Pod. Empty or omitted options leave the Pod unchanged.
+
+```yaml
+podOptions:
+  volumes:
+    - name: credentials
+      secret:
+        secretName: worker-credentials
+        items:
+          - key: token
+            path: token
+    - name: scratch
+      emptyDir: {}
+  volumeMounts:
+    - name: credentials
+      mountPath: /run/secrets/worker
+      readOnly: true
+    - name: scratch
+      mountPath: /scratch
+  env:
+    - name: NODE_NAME
+      valueFrom:
+        fieldRef:
+          fieldPath: spec.nodeName
+```
+
+This example mounts a credential directory and scratch storage, and exposes the node name.
+Configure the worker image's programs to read these paths and environment variables.
+Kubernetes mounts credentials but does not configure the programs that use them.
+
+Create the referenced Secret in the worker namespace through your existing secret-management system.
+The service references it without reading its values or owning its lifecycle.
+A missing required Secret prevents the worker from starting.
+
+The service validates Kubernetes types, rejects unknown fields, duplicate names, overlapping mounts,
+and mounts that do not reference an additional volume. The `peers` and `state` volumes and their mount
+paths are reserved. Generated worker identity, capability, slot and retirement environment variables,
+and `NIX_CONFIG`, cannot be overridden. Kubernetes validates the remaining API semantics at Pod creation.
+
+These options are trusted operator configuration, not a security boundary for untrusted jobs.
+Cluster admission policy and namespace permissions still govern volume sources and privileges.
+Mounted credentials are separate from Gradient's server-sent project credentials, and mounting them
+does not automatically make them available inside a Nix build sandbox.
+
+Prefer directory mounts for credentials that rotate: Kubernetes does not update Secret mounts made
+through `subPath`. A program that copies credentials at startup also needs its own refresh behavior.
+Additional mounts must not hide executables or configuration required by the worker image.
+
 ### GitHub Actions
 
 - The service creates or repairs the Gradient team webhook, the GitHub repository webhook and `.github/workflows/gradient-worker.yml` on the default branch.

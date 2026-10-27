@@ -28,6 +28,27 @@ connections:
           privileged: true
           nodeSelector:
             kubernetes.io/arch: amd64
+          podOptions:
+            volumes:
+              - name: credentials
+                secret:
+                  secretName: worker-credentials
+                  items:
+                    - key: token
+                      path: token
+              - name: scratch
+                emptyDir: {}
+            volumeMounts:
+              - name: credentials
+                mountPath: /run/secrets/worker
+                readOnly: true
+              - name: scratch
+                mountPath: /scratch
+            env:
+              - name: NODE_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: spec.nodeName
         arm:
           system: aarch64-linux
           nodeSelector:

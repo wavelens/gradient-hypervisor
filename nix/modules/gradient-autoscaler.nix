@@ -109,6 +109,41 @@ let
           It gives builds the Nix sandbox and {file}`/dev/kvm` at the cost of host isolation.
         '';
       };
+
+      podOptions = mkOption {
+        default = { };
+        type = types.submodule {
+          options = {
+            volumes = mkOption {
+              type = types.listOf (types.attrsOf types.anything);
+              default = [ ];
+              description = "Additional Kubernetes Volume objects. The names peers and state are reserved.";
+            };
+            volumeMounts = mkOption {
+              type = types.listOf (types.attrsOf types.anything);
+              default = [ ];
+              description = ''
+                Additional Kubernetes VolumeMount objects for the worker container.
+                Each mount references an additional volume and must not overlap another mount or the
+                autoscaler's state and peer credentials.
+              '';
+            };
+            env = mkOption {
+              type = types.listOf (types.attrsOf types.anything);
+              default = [ ];
+              description = ''
+                Additional Kubernetes EnvVar objects for the worker container, including valueFrom.
+                Generated identity, capabilities, slots, lifetime settings and NIX_CONFIG cannot be overridden.
+              '';
+            };
+          };
+        };
+        description = ''
+          Additive worker Pod configuration, validated by the autoscaler using Kubernetes API types.
+          Configure Secret references, never secret values. This is trusted operator configuration;
+          Kubernetes admission policy still controls access to privileged volume types.
+        '';
+      };
     };
   };
 

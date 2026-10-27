@@ -106,7 +106,13 @@ async fn open_launch_since(
 #[tokio::test]
 async fn scale_starts_a_pod_whose_secret_holds_the_registered_token() {
     let server = MockServer::start().await;
-    let mut fixture = common::kubernetes_service(&server.uri()).await;
+    let mut config = common::kubernetes();
+    config.pools.get_mut("x86").unwrap().pod_options = serde_json::from_value(json!({
+        "volumes": [{"name": "fetch-auth", "secret": {"secretName": "worker-fetch-auth"}}],
+        "volumeMounts": [{"name": "fetch-auth", "mountPath": "/creds", "readOnly": true}],
+        "env": [{"name": "FETCH_MODE", "valueFrom": {"configMapKeyRef": {"name": "worker-config", "key": "mode"}}}]
+    })).unwrap();
+    let mut fixture = common::kubernetes_service_with_config(&server.uri(), config).await;
     Arc::get_mut(&mut fixture.svc)
         .unwrap()
         .conn
@@ -190,6 +196,22 @@ async fn scale_starts_a_pod_whose_secret_holds_the_registered_token() {
             var["name"] == format!("GRADIENT_WORKER_CAPABILITIES_{role}") && var["value"] == enabled
         }));
     }
+    assert!(
+        manifest["spec"]["volumes"].as_array().unwrap().contains(
+            &json!({"name": "fetch-auth", "secret": {"secretName": "worker-fetch-auth"}})
+        )
+    );
+    assert!(
+        manifest["spec"]["containers"][0]["volumeMounts"]
+            .as_array()
+            .unwrap()
+            .contains(&json!({"name": "fetch-auth", "mountPath": "/creds", "readOnly": true}))
+    );
+    assert!(env.iter().any(|var| var
+        == &json!({
+            "name": "FETCH_MODE",
+            "valueFrom": {"configMapKeyRef": {"name": "worker-config", "key": "mode"}}
+        })));
 
     let secret = json_of(&received(&server, "POST", SECRETS).await[0]);
     assert_eq!(

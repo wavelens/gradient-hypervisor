@@ -1,3 +1,4 @@
+use crate::config::pod_options::{PEERS_DIR, PEERS_VOLUME, STATE_DIR, STATE_VOLUME};
 use crate::config::{Kubernetes, Pool, WorkerCapabilities};
 use crate::kubernetes::client::Pod;
 use crate::launcher::Progress;
@@ -7,8 +8,6 @@ use uuid::Uuid;
 pub const CONNECTION_LABEL: &str = "gradient.wavelens.io/connection";
 pub const LAUNCH_LABEL: &str = "gradient.wavelens.io/launch";
 pub const POOL_LABEL: &str = "gradient.wavelens.io/pool";
-const PEERS_DIR: &str = "/run/secrets/gradient";
-const STATE_DIR: &str = "/var/lib/gradient-worker";
 const GRACE_SECONDS: u64 = 600;
 const START_FAILURES: [&str; 5] = [
     "ErrImagePull",
@@ -39,7 +38,7 @@ pub fn pod_name(launch_id: Uuid) -> String {
 impl WorkerPod<'_> {
     pub fn manifest(&self) -> Value {
         let name = pod_name(self.launch_id);
-        json!({
+        let mut manifest = json!({
             "apiVersion": "v1",
             "kind": "Pod",
             "metadata": {
@@ -69,16 +68,26 @@ impl WorkerPod<'_> {
                     "resources": self.resources(),
                     "securityContext": { "privileged": self.pool.privileged },
                     "volumeMounts": [
-                        { "name": "peers", "mountPath": PEERS_DIR, "readOnly": true },
-                        { "name": "state", "mountPath": STATE_DIR },
+                        { "name": PEERS_VOLUME, "mountPath": PEERS_DIR, "readOnly": true },
+                        { "name": STATE_VOLUME, "mountPath": STATE_DIR },
                     ],
                 }],
                 "volumes": [
-                    { "name": "peers", "secret": { "secretName": name, "defaultMode": 0o400 } },
-                    { "name": "state", "emptyDir": {} },
+                    { "name": PEERS_VOLUME, "secret": { "secretName": name, "defaultMode": 0o400 } },
+                    { "name": STATE_VOLUME, "emptyDir": {} },
                 ],
             },
-        })
+        });
+        let options = &self.pool.pod_options;
+        manifest["spec"]["volumes"]
+            .as_array_mut()
+            .unwrap()
+            .extend(options.volumes.iter().map(|volume| json!(volume)));
+        manifest["spec"]["containers"][0]["volumeMounts"]
+            .as_array_mut()
+            .unwrap()
+            .extend(options.volume_mounts.iter().map(|mount| json!(mount)));
+        manifest
     }
 
     fn env(&self) -> Vec<Value> {
@@ -124,9 +133,12 @@ impl WorkerPod<'_> {
             env.push(("NIX_CONFIG", nix_config.clone()));
         }
 
-        env.into_iter()
+        let mut env: Vec<Value> = env
+            .into_iter()
             .map(|(name, value)| json!({ "name": name, "value": value }))
-            .collect()
+            .collect();
+        env.extend(self.pool.pod_options.env.iter().map(|var| json!(var)));
+        env
     }
 
     fn resources(&self) -> Value {
@@ -348,6 +360,52 @@ mod tests {
         ];
         for (pod, expected) in cases {
             assert_eq!(progress_of(pod.as_ref()), expected, "{pod:?}");
+        }
+    }
+
+    #[test]
+    fn pod_options_append_to_generated_volumes_mounts_and_environment() {
+        let (cluster, mut pool) = (cluster(), pool());
+        let baseline = worker_pod(&cluster, &pool).manifest();
+        pool.pod_options = serde_json::from_value(json!({
+            "volumes": [{"name": "fetch-auth", "secret": {"secretName": "tenant-fetch-auth"}}],
+            "volumeMounts": [{"name": "fetch-auth", "mountPath": "/creds", "readOnly": true}],
+            "env": [{"name": "FETCH_MODE", "valueFrom": {"configMapKeyRef": {"name": "worker-config", "key": "mode"}}}]
+        })).unwrap();
+        pool.pod_options.validate().unwrap();
+        let manifest = worker_pod(&cluster, &pool).manifest();
+        for (path, expected) in [
+            (
+                "/spec/volumes",
+                json!({"name": "fetch-auth", "secret": {"secretName": "tenant-fetch-auth"}}),
+            ),
+            (
+                "/spec/containers/0/volumeMounts",
+                json!({"name": "fetch-auth", "mountPath": "/creds", "readOnly": true}),
+            ),
+            (
+                "/spec/containers/0/env",
+                json!({"name": "FETCH_MODE", "valueFrom": {"configMapKeyRef": {"name": "worker-config", "key": "mode"}}}),
+            ),
+        ] {
+            let original = baseline.pointer(path).unwrap().as_array().unwrap();
+            let extended = manifest.pointer(path).unwrap().as_array().unwrap();
+            assert!(extended.starts_with(original), "{path}");
+            assert_eq!(&extended[original.len()..], &[expected], "{path}");
+        }
+    }
+
+    #[test]
+    fn all_generated_environment_fields_are_protected_by_config_validation() {
+        let (cluster, pool) = (cluster(), pool());
+        let manifest = worker_pod(&cluster, &pool).manifest();
+        for env in manifest["spec"]["containers"][0]["env"].as_array().unwrap() {
+            let options: crate::config::pod_options::PodOptions =
+                serde_json::from_value(json!({"env": [env]})).unwrap();
+            assert!(
+                options.validate().is_err(),
+                "unprotected generated environment: {env}"
+            );
         }
     }
 

@@ -80,10 +80,16 @@ pub struct KubernetesService {
 }
 
 pub async fn kubernetes_service(server_uri: &str) -> KubernetesService {
+    kubernetes_service_with_config(server_uri, kubernetes()).await
+}
+
+pub async fn kubernetes_service_with_config(
+    server_uri: &str,
+    config: Kubernetes,
+) -> KubernetesService {
     let url = Url::parse(server_uri).unwrap();
     let mut token = NamedTempFile::new().unwrap();
     writeln!(token, "service-account-token").unwrap();
-    let config = kubernetes();
     let client = KubernetesClient::with_api_url(url.clone(), token.path().to_owned(), "ci");
     let svc = Arc::new(ConnectionService::new(
         connection(

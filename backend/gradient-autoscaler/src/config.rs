@@ -5,6 +5,9 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use url::Url;
 
+pub mod pod_options;
+use pod_options::PodOptions;
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Config {
@@ -113,6 +116,8 @@ pub struct Pool {
     pub tolerations: Vec<serde_json::Value>,
     #[serde(default)]
     pub privileged: bool,
+    #[serde(default)]
+    pub pod_options: PodOptions,
 }
 
 #[derive(Deserialize)]
@@ -260,6 +265,12 @@ impl Kubernetes {
             bail!("connection {connection}: pool {label}: maxJobs must be greater than zero");
         }
 
+        for (label, pool) in &self.pools {
+            pool.pod_options.validate().map_err(|error| {
+                anyhow::anyhow!("connection {connection}: pool {label}: podOptions: {error:#}")
+            })?;
+        }
+
         Ok(self)
     }
 }
@@ -395,6 +406,17 @@ mod tests {
             );
             assert!(Config::parse(&with_connections(&entry)).is_err());
         }
+    }
+
+    #[test]
+    fn kubernetes_validates_pod_options_before_launching() {
+        let launcher = KUBERNETES.replace(
+            "\"system\":\"x86_64-linux\"",
+            "\"system\":\"x86_64-linux\",\"podOptions\":{\"env\":[{\"name\":\"GRADIENT_WORKER_ID\",\"value\":\"override\"}]}",
+        );
+        let error = error_of(&connection("a", &launcher));
+        assert!(error.contains("connection a: pool x86: podOptions"));
+        assert!(error.contains("controlled by the autoscaler"));
     }
 
     #[test]
