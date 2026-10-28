@@ -22,13 +22,23 @@ let
                 system = "x86_64-linux";
                 podOptions = {
                   volumes = [
-                    { name = "credentials"; secret.secretName = "worker-credentials"; }
+                    {
+                      name = "credentials";
+                      secret.secretName = "worker-credentials";
+                    }
                   ];
                   volumeMounts = [
-                    { name = "credentials"; mountPath = "/run/secrets/worker"; readOnly = true; }
+                    {
+                      name = "credentials";
+                      mountPath = "/run/secrets/worker";
+                      readOnly = true;
+                    }
                   ];
                   env = [
-                    { name = "NODE_NAME"; valueFrom.fieldRef.fieldPath = "spec.nodeName"; }
+                    {
+                      name = "NODE_NAME";
+                      valueFrom.fieldRef.fieldPath = "spec.nodeName";
+                    }
                   ];
                 };
               };

@@ -338,12 +338,21 @@ mod tests {
     }
 
     #[test]
-    fn kubernetes_needs_a_pool_with_a_lowercase_name() {
+    fn kubernetes_rejects_invalid_pool_configuration() {
         let pools = r#"{"x86":{"system":"x86_64-linux"}}"#;
-        let empty = KUBERNETES.replace(pools, "{}");
-        let uppercase = KUBERNETES.replace("\"x86\"", "\"X86\"");
-        assert!(error_of(&connection("a", &empty)).contains("at least one pool"));
-        assert!(error_of(&connection("a", &uppercase)).contains("pool name"));
+        for (launcher, message) in [
+            (KUBERNETES.replace(pools, "{}"), "at least one pool"),
+            (KUBERNETES.replace("\"x86\"", "\"X86\""), "pool name"),
+            (
+                KUBERNETES.replace(
+                    "\"system\":\"x86_64-linux\"",
+                    "\"system\":\"x86_64-linux\",\"podOptions\":{\"env\":[{\"name\":\"GRADIENT_WORKER_ID\",\"value\":\"override\"}]}",
+                ),
+                "controlled by the autoscaler",
+            ),
+        ] {
+            assert!(error_of(&connection("a", &launcher)).contains(message));
+        }
     }
 
     #[test]
@@ -406,17 +415,6 @@ mod tests {
             );
             assert!(Config::parse(&with_connections(&entry)).is_err());
         }
-    }
-
-    #[test]
-    fn kubernetes_validates_pod_options_before_launching() {
-        let launcher = KUBERNETES.replace(
-            "\"system\":\"x86_64-linux\"",
-            "\"system\":\"x86_64-linux\",\"podOptions\":{\"env\":[{\"name\":\"GRADIENT_WORKER_ID\",\"value\":\"override\"}]}",
-        );
-        let error = error_of(&connection("a", &launcher));
-        assert!(error.contains("connection a: pool x86: podOptions"));
-        assert!(error.contains("controlled by the autoscaler"));
     }
 
     #[test]

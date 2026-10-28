@@ -4,6 +4,7 @@ let
   inherit (lib) literalExpression mapAttrsToList mkEnableOption mkIf mkOption optionals types;
 
   cfg = config.services.gradient-autoscaler;
+  jsonFormat = pkgs.formats.json { };
   credentialsDir = "/run/credentials/gradient-autoscaler.service";
   option = name: "services.gradient-autoscaler.connections.<name>.${name}";
 
@@ -115,34 +116,23 @@ let
         type = types.submodule {
           options = {
             volumes = mkOption {
-              type = types.listOf (types.attrsOf types.anything);
+              type = types.listOf (types.attrsOf jsonFormat.type);
               default = [ ];
               description = "Additional Kubernetes Volume objects. The names peers and state are reserved.";
             };
             volumeMounts = mkOption {
-              type = types.listOf (types.attrsOf types.anything);
+              type = types.listOf (types.attrsOf jsonFormat.type);
               default = [ ];
-              description = ''
-                Additional Kubernetes VolumeMount objects for the worker container.
-                Each mount references an additional volume and must not overlap another mount or the
-                autoscaler's state and peer credentials.
-              '';
+              description = "Additional Kubernetes VolumeMount objects that do not overlap other mounts or reserved paths.";
             };
             env = mkOption {
-              type = types.listOf (types.attrsOf types.anything);
+              type = types.listOf (types.attrsOf jsonFormat.type);
               default = [ ];
-              description = ''
-                Additional Kubernetes EnvVar objects for the worker container, including valueFrom.
-                Generated identity, capabilities, slots, lifetime settings and NIX_CONFIG cannot be overridden.
-              '';
+              description = "Additional Kubernetes EnvVar objects, excluding autoscaler-controlled settings.";
             };
           };
         };
-        description = ''
-          Additive worker Pod configuration, validated by the autoscaler using Kubernetes API types.
-          Configure Secret references, never secret values. This is trusted operator configuration;
-          Kubernetes admission policy still controls access to privileged volume types.
-        '';
+        description = "Additional worker Pod settings for trusted operators. Use Secret references, not secret values.";
       };
     };
   };
@@ -333,7 +323,7 @@ let
       };
     };
 
-  configFile = (pkgs.formats.json { }).generate "gradient-autoscaler.json" {
+  configFile = jsonFormat.generate "gradient-autoscaler.json" {
     inherit (cfg) listen publicUrl catchUpInterval;
     stateDir = "/var/lib/gradient-autoscaler";
     connections = mapAttrsToList (name: connection: {

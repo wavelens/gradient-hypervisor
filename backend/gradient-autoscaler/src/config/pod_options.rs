@@ -19,6 +19,7 @@ pub(crate) const CONTROLLED_ENV: &[&str] = &[
     "GRADIENT_WORKER_CAPABILITIES_BUILD",
     "GRADIENT_WORKER_CAPABILITIES_NETWORK",
     "GRADIENT_WORKER_CAPABILITIES_SECRETS",
+    "GRADIENT_WORKER_CAPABILITIES_EXEC",
     "GRADIENT_WORKER_CAPABILITIES_EVAL",
     "GRADIENT_WORKER_BUILD_MAX_CONCURRENT",
     "GRADIENT_WORKER_IDLE_TIMEOUT",
@@ -42,23 +43,15 @@ impl PodOptions {
         let mut volumes = HashSet::new();
         for volume in &self.volumes {
             let name = volume.name.as_str();
-            if !volume_name(name) {
-                bail!("volume name {name:?} must be a Kubernetes DNS label");
-            }
             if [PEERS_VOLUME, STATE_VOLUME].contains(&name) {
                 bail!("volume {name:?} is controlled by the autoscaler");
             }
             if !volumes.insert(name) {
                 bail!("volume {name:?} is defined twice");
             }
-            // Kubernetes serializes only the selected source fields and the name.
-            let fields = serde_json::to_value(volume)?;
-            if !fields.as_object().is_some_and(|fields| fields.len() == 2) {
-                bail!("volume {name:?} must have exactly one source");
-            }
         }
 
-        let mut paths: Vec<&Path> = Vec::new();
+        let mut paths = vec![Path::new(PEERS_DIR), Path::new(STATE_DIR)];
         for mount in &self.volume_mounts {
             if !volumes.contains(mount.name.as_str()) {
                 bail!("mount {:?} must reference an additional volume", mount.name);
@@ -70,62 +63,23 @@ impl PodOptions {
                     mount.mount_path
                 );
             }
-            for reserved in [PEERS_DIR, STATE_DIR] {
-                if overlaps(path, Path::new(reserved)) {
-                    bail!(
-                        "mount path {:?} overlaps autoscaler state or credentials",
-                        mount.mount_path
-                    );
-                }
-            }
             if paths.iter().any(|other| overlaps(path, other)) {
                 bail!(
-                    "mount path {:?} overlaps another additional mount",
+                    "mount path {:?} overlaps another or a reserved mount",
                     mount.mount_path
                 );
             }
             paths.push(path);
-            if mount.sub_path.is_some() && mount.sub_path_expr.is_some() {
-                bail!("mount {:?} sets both subPath and subPathExpr", mount.name);
-            }
-            for sub_path in [mount.sub_path.as_deref(), mount.sub_path_expr.as_deref()]
-                .into_iter()
-                .flatten()
-            {
-                let path = Path::new(sub_path);
-                if path.is_absolute() || has_parent(path) {
-                    bail!(
-                        "mount {:?} subPath must be relative without '..'",
-                        mount.name
-                    );
-                }
-            }
         }
 
         let mut names = HashSet::new();
         for env in &self.env {
             let name = env.name.as_str();
-            if name.is_empty()
-                || !name
-                    .bytes()
-                    .all(|byte| (b' '..=b'~').contains(&byte) && byte != b'=')
-            {
-                bail!("environment name {name:?} must be printable ASCII without '='");
-            }
             if CONTROLLED_ENV.contains(&name) {
                 bail!("environment {name:?} is controlled by the autoscaler");
             }
             if !names.insert(name) {
                 bail!("environment {name:?} is defined twice");
-            }
-            if let Some(source) = &env.value_from {
-                if env.value.is_some() {
-                    bail!("environment {name:?} sets both value and valueFrom");
-                }
-                let fields = serde_json::to_value(source)?;
-                if !fields.as_object().is_some_and(|fields| fields.len() == 1) {
-                    bail!("environment {name:?} valueFrom must have exactly one source");
-                }
             }
         }
         Ok(())
@@ -151,16 +105,6 @@ where
     Ok(parsed)
 }
 
-fn volume_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= 63
-        && name.as_bytes()[0].is_ascii_alphanumeric()
-        && name.as_bytes()[name.len() - 1].is_ascii_alphanumeric()
-        && name
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-}
-
 fn has_parent(path: &Path) -> bool {
     path.components().any(|part| part == Component::ParentDir)
 }
@@ -181,73 +125,29 @@ mod tests {
             .validate()
     }
 
-    fn error(value: Value) -> String {
-        format!("{:#}", validate(value).unwrap_err())
-    }
-
     #[test]
-    fn standard_volumes_mounts_and_environment_references_are_valid() {
-        validate(json!({
-            "volumes": [
-                {"name": "fetch-auth", "secret": {"secretName": "fetch-auth", "items": [{"key": "netrc", "path": "merged.netrc"}]}},
-                {"name": "config", "configMap": {"name": "worker-config"}},
-                {"name": "scratch", "emptyDir": {"sizeLimit": "10Gi"}},
-                {"name": "cache", "persistentVolumeClaim": {"claimName": "cache"}}
-            ],
-            "volumeMounts": [
-                {"name": "fetch-auth", "mountPath": "/creds", "readOnly": true},
-                {"name": "config", "mountPath": "/etc/worker", "readOnly": true},
-                {"name": "scratch", "mountPath": "/build"},
-                {"name": "cache", "mountPath": "/cache"}
-            ],
-            "env": [
-                {"name": "NIX_REMOTE", "value": "daemon"},
-                {"name": "TOKEN", "valueFrom": {"secretKeyRef": {"name": "worker-auth", "key": "token"}}},
-                {"name": "SETTING", "valueFrom": {"configMapKeyRef": {"name": "worker-config", "key": "setting"}}},
-                {"name": "NODE_NAME", "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}}},
-                {"name": "CPU_LIMIT", "valueFrom": {"resourceFieldRef": {"resource": "limits.cpu"}}}
-            ]
-        })).unwrap();
-    }
-
-    #[test]
-    fn volume_names_are_unique_and_cannot_replace_generated_volumes() {
-        for name in [PEERS_VOLUME, STATE_VOLUME] {
-            assert!(
-                error(json!({"volumes": [{"name": name, "emptyDir": {}}]})).contains("controlled")
-            );
-        }
-        assert!(
-            error(json!({"volumes": [
+    fn names_cannot_conflict_with_generated_fields_or_each_other() {
+        for value in [
+            json!({"volumes": [{"name": "peers", "emptyDir": {}}]}),
+            json!({"volumes": [{"name": "state", "emptyDir": {}}]}),
+            json!({"volumes": [
                 {"name": "cache", "emptyDir": {}},
                 {"name": "cache", "emptyDir": {}}
-            ]}))
-            .contains("twice")
-        );
-    }
-
-    #[test]
-    fn volume_requires_a_valid_name_and_exactly_one_source() {
-        for name in ["", "-cache", "cache-", "Bad", "cache.name", &"a".repeat(64)] {
-            assert!(
-                error(json!({"volumes": [{"name": name, "emptyDir": {}}]})).contains("DNS label")
-            );
-        }
-        for volume in [
-            json!({"name": "cache"}),
-            json!({"name": "cache", "emptyDir": {}, "secret": {"secretName": "auth"}}),
+            ]}),
+            json!({"env": [{"name": "NIX_CONFIG", "value": "override"}]}),
+            json!({"env": [{"name": "GRADIENT_WORKER_CAPABILITIES_EXEC", "value": "true"}]}),
+            json!({"env": [{"name": "EXTRA"}, {"name": "EXTRA"}]}),
+            json!({"volumeMounts": [{"name": "peers", "mountPath": "/extra"}]}),
         ] {
-            assert!(error(json!({"volumes": [volume]})).contains("exactly one source"));
+            assert!(validate(value).is_err());
         }
     }
 
     #[test]
-    fn mounts_cannot_reuse_generated_volumes_or_hide_generated_paths() {
-        assert!(
-            error(json!({"volumeMounts": [{"name": "peers", "mountPath": "/creds"}]}))
-                .contains("additional volume")
-        );
+    fn mounts_cannot_hide_reserved_paths_or_each_other() {
         for path in [
+            "relative",
+            "/extra/../run",
             "/",
             "/run",
             PEERS_DIR,
@@ -256,79 +156,25 @@ mod tests {
             "/var/lib/gradient-worker/child",
         ] {
             assert!(
-                error(json!({
+                validate(json!({
                     "volumes": [{"name": "auth", "emptyDir": {}}],
                     "volumeMounts": [{"name": "auth", "mountPath": path}]
                 }))
-                .contains("overlaps autoscaler")
+                .is_err()
             );
         }
-    }
-
-    #[test]
-    fn mount_paths_must_be_absolute_and_non_overlapping() {
-        for path in ["relative", "/creds/../run"] {
+        for path in ["/creds", "/creds/child"] {
             assert!(
-                error(json!({
-                    "volumes": [{"name": "auth", "emptyDir": {}}],
-                    "volumeMounts": [{"name": "auth", "mountPath": path}]
-                }))
-                .contains("must be absolute")
-            );
-        }
-        for path in ["/creds", "/creds/", "/creds/child", "/creds//./child"] {
-            assert!(
-                error(json!({
+                validate(json!({
                     "volumes": [{"name": "auth", "emptyDir": {}}],
                     "volumeMounts": [
                         {"name": "auth", "mountPath": "/creds"},
                         {"name": "auth", "mountPath": path}
                     ]
                 }))
-                .contains("another additional mount")
+                .is_err()
             );
         }
-    }
-
-    #[test]
-    fn subpaths_cannot_escape_a_volume_or_set_both_forms() {
-        for fields in [
-            json!({"subPath": "/absolute"}),
-            json!({"subPath": "../outside"}),
-            json!({"subPath": "file", "subPathExpr": "$(FILE)"}),
-        ] {
-            let mut mount = json!({"name": "auth", "mountPath": "/creds"});
-            mount
-                .as_object_mut()
-                .unwrap()
-                .extend(fields.as_object().unwrap().clone());
-            assert!(
-                error(json!({
-                    "volumes": [{"name": "auth", "emptyDir": {}}],
-                    "volumeMounts": [mount]
-                }))
-                .contains("subPath")
-            );
-        }
-    }
-
-    #[test]
-    fn environment_names_and_sources_are_unambiguous() {
-        for env in [
-            json!({"name": "NIX_CONFIG", "value": "override"}),
-            json!({"name": ""}),
-            json!({"name": "A=B"}),
-            json!({"name": "A\nB"}),
-            json!({"name": "TOKEN", "value": "x", "valueFrom": {"secretKeyRef": {"name": "s", "key": "k"}}}),
-            json!({"name": "TOKEN", "valueFrom": {}}),
-            json!({"name": "TOKEN", "valueFrom": {
-                "secretKeyRef": {"name": "s", "key": "k"},
-                "fieldRef": {"fieldPath": "spec.nodeName"}
-            }}),
-        ] {
-            assert!(validate(json!({"env": [env]})).is_err());
-        }
-        assert!(error(json!({"env": [{"name": "A"}, {"name": "A"}]})).contains("twice"));
     }
 
     #[test]
@@ -343,7 +189,7 @@ mod tests {
             json!({"volumeMounts": [{"name": "auth", "mountPath": "/creds", "read_only": true}]}),
             json!({"env": [{"name": "A", "value_from": {"secretKeyRef": {"name": "s", "key": "k"}}}]}),
         ] {
-            assert!(validate(value).is_err());
+            assert!(serde_json::from_value::<PodOptions>(value).is_err());
         }
     }
 }

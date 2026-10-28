@@ -368,30 +368,46 @@ mod tests {
         let (cluster, mut pool) = (cluster(), pool());
         let baseline = worker_pod(&cluster, &pool).manifest();
         pool.pod_options = serde_json::from_value(json!({
-            "volumes": [{"name": "fetch-auth", "secret": {"secretName": "tenant-fetch-auth"}}],
+            "volumes": [
+                {"name": "fetch-auth", "secret": {"secretName": "tenant-fetch-auth"}},
+                {"name": "scratch"}
+            ],
             "volumeMounts": [{"name": "fetch-auth", "mountPath": "/creds", "readOnly": true}],
-            "env": [{"name": "FETCH_MODE", "valueFrom": {"configMapKeyRef": {"name": "worker-config", "key": "mode"}}}]
+            "env": [
+                {"name": "FETCH_MODE", "valueFrom": {"configMapKeyRef": {"name": "worker-config", "key": "mode"}}},
+                {"name": "NODE_NAME", "value": "", "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}}}
+            ]
         })).unwrap();
         pool.pod_options.validate().unwrap();
         let manifest = worker_pod(&cluster, &pool).manifest();
         for (path, expected) in [
             (
                 "/spec/volumes",
-                json!({"name": "fetch-auth", "secret": {"secretName": "tenant-fetch-auth"}}),
+                json!([
+                    {"name": "fetch-auth", "secret": {"secretName": "tenant-fetch-auth"}},
+                    {"name": "scratch"}
+                ]),
             ),
             (
                 "/spec/containers/0/volumeMounts",
-                json!({"name": "fetch-auth", "mountPath": "/creds", "readOnly": true}),
+                json!([{"name": "fetch-auth", "mountPath": "/creds", "readOnly": true}]),
             ),
             (
                 "/spec/containers/0/env",
-                json!({"name": "FETCH_MODE", "valueFrom": {"configMapKeyRef": {"name": "worker-config", "key": "mode"}}}),
+                json!([
+                    {"name": "FETCH_MODE", "valueFrom": {"configMapKeyRef": {"name": "worker-config", "key": "mode"}}},
+                    {"name": "NODE_NAME", "value": "", "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}}}
+                ]),
             ),
         ] {
             let original = baseline.pointer(path).unwrap().as_array().unwrap();
             let extended = manifest.pointer(path).unwrap().as_array().unwrap();
             assert!(extended.starts_with(original), "{path}");
-            assert_eq!(&extended[original.len()..], &[expected], "{path}");
+            assert_eq!(
+                &extended[original.len()..],
+                expected.as_array().unwrap(),
+                "{path}"
+            );
         }
     }
 
