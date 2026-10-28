@@ -10,28 +10,30 @@ repository   = "https://github.com/wavelens/gradient-hypervisor"
 rust-version = "1.88"
 
 [workspace.dependencies]
-anyhow             = { version = "1.0.100", default-features = false, features = ["std"] }
-axum               = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio", "query"] }
-base64             = { version = "0.22.1", default-features = false, features = ["std"] }
-clap               = { version = "4.6.7", default-features = false, features = ["std", "derive", "env", "help", "usage", "error-context"] }
-hex                = { version = "0.4.3", default-features = false, features = ["std"] }
-hmac               = { version = "0.12.1", default-features = false }
-jsonwebtoken       = { version = "10.4.0", default-features = false, features = ["aws_lc_rs", "use_pem"] }
-k8s-openapi        = { version = "0.28.0", default-features = false, features = ["std", "v1_36"] }
-rand               = { version = "0.9.4", default-features = false, features = ["std", "std_rng", "thread_rng"] }
+anyhow             = { version = "1.0", default-features = false, features = ["std"] }
+axum               = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query"] }
+base64             = { version = "0.22", default-features = false, features = ["std"] }
+clap               = { version = "4.6", default-features = false, features = ["std", "derive", "env", "help", "usage", "error-context"] }
+hex                = { version = "0.4", default-features = false, features = ["std"] }
+hmac               = { version = "0.12", default-features = false }
+jsonwebtoken       = { version = "10.4", default-features = false, features = ["aws_lc_rs", "use_pem"] }
+k8s-openapi        = { version = "0.28", default-features = false, features = ["std", "v1_36"] }
+rand               = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
+# Retain the redirect credential-stripping and proxy-authentication fixes.
+# https://github.com/seanmonstar/reqwest/blob/de55373434f07f42926599dbb5a88550d8e55112/CHANGELOG.md
 reqwest            = { version = "0.13.5", default-features = false, features = ["rustls", "json", "query", "charset", "http2"] }
-serde              = { version = "1.0.228", default-features = false, features = ["std", "derive"] }
-serde_ignored      = { version = "0.1.14" }
-serde_json         = { version = "1.0.145", default-features = false, features = ["std"] }
-sha2               = { version = "0.10.9", default-features = false }
-sqlx               = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
-tempfile           = { version = "3.27.0", default-features = false }
-thiserror          = { version = "2.0.18", default-features = false }
-time               = { version = "0.3.44", default-features = false, features = ["std"] }
-tokio              = { version = "1.52.3", default-features = false, features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
-tower              = { version = "0.5.3", default-features = false, features = ["util"] }
-tracing            = { version = "0.1.41", default-features = false, features = ["std", "attributes"] }
-tracing-subscriber = { version = "0.3.20", default-features = false, features = ["std", "fmt", "ansi", "env-filter"] }
-url                = { version = "2.5.7", default-features = false, features = ["std", "serde"] }
-uuid               = { version = "1.23.4", default-features = false, features = ["std", "v4", "serde"] }
-wiremock           = { version = "0.6.5", default-features = false }
+serde              = { version = "1.0", default-features = false, features = ["std", "derive"] }
+serde_ignored      = { version = "0.1" }
+serde_json         = { version = "1.0", default-features = false, features = ["std"] }
+sha2               = { version = "0.10", default-features = false }
+sqlx               = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
+tempfile           = { version = "3.27", default-features = false }
+thiserror          = { version = "2.0", default-features = false }
+time               = { version = "0.3", default-features = false, features = ["std"] }
+tokio              = { version = "1.52", default-features = false, features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
+tower              = { version = "0.5", default-features = false, features = ["util"] }
+tracing            = { version = "0.1", default-features = false, features = ["std", "attributes"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt", "ansi", "env-filter"] }
+url                = { version = "2.5", default-features = false, features = ["std", "serde"] }
+uuid               = { version = "1.23", default-features = false, features = ["std", "v4", "serde"] }
+wiremock           = { version = "0.6", default-features = false }
